@@ -3,16 +3,22 @@ import { Subject, Observable } from 'rxjs';
 
 import { UploadxOptions, UploadState, UploadxControlEvent, UploaderOptions } from './interfaces';
 import { Uploader } from './uploader';
+
 /**
  *
  */
 @Injectable({ providedIn: 'root' })
 export class UploadxService {
   subj: Subject<UploadState> = new Subject();
-  queue: Uploader[] = [];
+  private queue: Uploader[] = [];
+  uploaders = this.queue;
   private concurrency = 2;
   private autoUpload = true;
   private options: UploadxOptions;
+
+  private get active() {
+    return this.queue.filter(u => u.status !== 'complete' && u.status !== 'cancelled');
+  }
 
   get uploaderOptions(): UploaderOptions {
     return {
@@ -61,32 +67,32 @@ export class UploadxService {
    *
    */
   control(event: UploadxControlEvent) {
+    const id = event.itemOptions ? event.itemOptions.uploadId || event.uploadId : event.uploadId;
+    const target = this.active.filter(f => f.uploadId === id);
+
     switch (event.action) {
-      case 'cancelAll':
-        this.queue.filter(f => f.status !== 'complete').map(f => (f.status = 'cancelled'));
-        break;
-      case 'pauseAll':
-        this.queue.filter(f => f.status !== 'complete').map(f => (f.status = 'paused'));
-        break;
-      case 'refreshToken':
-        this.queue.filter(f => f.status !== 'complete').map(f => (f.options.token = event.token));
-        break;
-      case 'uploadAll':
-        this.queue
-          .filter(f => f.status !== 'complete' && f.status !== 'uploading')
-          .map(f => (f.status = 'queue'));
-        this.processQueue();
-        break;
       case 'upload':
-        const uploadId = event.uploadId || event.itemOptions.uploadId;
-        this.queue.find(f => f.uploadId === uploadId).upload(event.itemOptions);
+        target.map(u => u.upload(event.itemOptions));
         this.processQueue();
         break;
       case 'cancel':
-        this.queue.find(f => f.uploadId === event.uploadId).status = 'cancelled';
+        target.map(u => (u.status = 'cancelled'));
         break;
       case 'pause':
-        this.queue.find(f => f.uploadId === event.uploadId).status = 'paused';
+        target.map(u => (u.status = 'paused'));
+        break;
+      case 'cancelAll':
+        this.active.map(u => (u.status = 'cancelled'));
+        break;
+      case 'pauseAll':
+        this.active.map(u => (u.status = 'paused'));
+        break;
+      case 'uploadAll':
+        this.active.filter(u => u.status !== 'uploading').map(u => (u.status = 'queue'));
+        this.processQueue();
+        break;
+      case 'refreshToken':
+        this.queue.map(u => (u.options.token = event.token));
         break;
       default:
         break;
@@ -96,17 +102,10 @@ export class UploadxService {
    * Queue management
    */
   private processQueue() {
-    const running = this.queue.filter((uploader: Uploader) => uploader.status === 'uploading');
-
-    const completed = this.queue.findIndex((uploader: Uploader) => uploader.status === 'complete');
-    if (completed !== -1) {
-      this.queue.splice(completed, 1);
-    }
+    const running = this.queue.filter(u => u.status === 'uploading').length;
     this.queue
-      .filter((uploader: Uploader) => uploader.status === 'queue')
-      .slice(0, this.concurrency - running.length)
-      .forEach((uploader: Uploader) => {
-        uploader.upload();
-      });
+      .filter(u => u.status === 'queue')
+      .slice(0, this.concurrency - running)
+      .forEach(u => u.upload());
   }
 }
